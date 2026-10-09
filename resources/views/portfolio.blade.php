@@ -57,6 +57,14 @@
         ::-webkit-scrollbar-thumb:hover {
             background: #94a3b8;
         }
+        #preview-toolbar {
+            transition: transform 200ms ease, opacity 200ms ease;
+        }
+        #preview-toolbar.is-hidden {
+            transform: translate(-50%, -150%);
+            opacity: 0;
+            pointer-events: none;
+        }
         @media print {
             .no-print { display: none !important; }
             .print-only { display: block !important; }
@@ -261,7 +269,8 @@
         </section>
 
         <section id="view-preview" class="view-section hidden max-w-5xl mx-auto px-4 py-8">
-            <div class="no-print bg-white p-4 rounded-2xl border border-slate-200 shadow-sm mb-8 flex flex-wrap items-center justify-between gap-4 sticky top-20 z-30">
+            <div id="preview-toolbar-spacer" class="no-print mb-8" aria-hidden="true"></div>
+            <div id="preview-toolbar" class="no-print fixed top-20 left-1/2 -translate-x-1/2 w-[calc(100%-2rem)] max-w-5xl bg-white p-4 rounded-2xl border border-slate-200 shadow-sm flex flex-wrap items-center justify-between gap-4 z-30">
                 <div class="flex items-center space-x-2">
                     <button onclick="navigateTo('templates')" class="text-xs font-bold px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition flex items-center gap-1.5"><i class="fa-solid fa-arrow-left"></i> Change Template</button>
                     <button onclick="editCurrentPortfolio()" class="text-xs font-bold px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg transition flex items-center gap-1.5"><i class="fa-solid fa-pen"></i> Edit Info</button>
@@ -344,47 +353,76 @@
             socialWebsite: 'https://example.com'
         };
 
+        function safeArray(value) {
+            return Array.isArray(value) ? value : [];
+        }
+
+        function getErrorMessage(error) {
+            if (error instanceof Error && error.message) return error.message;
+            if (typeof error === 'string' && error.trim()) return error;
+            if (error && typeof error === 'object' && 'message' in error && typeof error.message === 'string' && error.message.trim()) return error.message;
+            return 'Something went wrong. Please try again.';
+        }
+
+        function normalizePortfolioData(data = {}) {
+            const portfolio = data && typeof data === 'object' ? data : {};
+            return {
+                ...SAMPLE_DATA,
+                ...portfolio,
+                skills: safeArray(portfolio.skills),
+                projects: safeArray(portfolio.projects),
+                experience: safeArray(portfolio.experience),
+            };
+        }
+
         window.addEventListener('DOMContentLoaded', async () => {
             try {
                 await loadPortfoliosFromServer();
             } catch (error) {
-                showToast(error.message);
+                showToast(getErrorMessage(error));
             }
             navigateTo('home');
         });
 
         async function apiRequest(url, method = 'GET', data = null) {
+            const csrfMeta = document.querySelector('meta[name="csrf-token"]');
             const response = await fetch(url, {
                 method,
                 headers: {
                     Accept: 'application/json',
-                    'Content-Type': 'application/json',
-                    'X-CSRF-TOKEN': document.querySelector('meta[name="csrf-token"]').content,
+                    ...(csrfMeta ? { 'X-CSRF-TOKEN': csrfMeta.getAttribute('content') || '' } : {}),
+                    ...(method !== 'GET' ? { 'Content-Type': 'application/json' } : {}),
                 },
                 body: data ? JSON.stringify(data) : null,
             });
             const result = await response.json().catch(() => ({}));
             if (!response.ok) {
-                const validationMessage = Object.values(result.errors || {}).flat()[0];
-                throw new Error(validationMessage || result.message || 'The request could not be completed.');
+                const validationMessage = Object.values(result?.errors || {}).flat().find(Boolean);
+                throw new Error(validationMessage || result?.message || 'The request could not be completed.');
             }
             return result;
         }
 
         async function loadPortfoliosFromServer() {
-            portfoliosDB = await apiRequest('/api/portfolios');
+            const payload = await apiRequest('/api/portfolios');
+            portfoliosDB = Array.isArray(payload) ? payload : Array.isArray(payload?.data) ? payload.data : [];
             updateSavedBadge();
         }
 
         function updateSavedBadge() {
             const badge = document.getElementById('saved-count-badge');
-            if (badge) badge.innerText = portfoliosDB.length;
+            if (badge) badge.innerText = String((Array.isArray(portfoliosDB) ? portfoliosDB.length : 0));
         }
 
         function navigateTo(viewName) {
             document.querySelectorAll('.view-section').forEach(sec => sec.classList.add('hidden'));
             const targetView = document.getElementById(`view-${viewName}`);
             if (targetView) targetView.classList.remove('hidden');
+            if (viewName === 'preview') {
+                const toolbar = document.getElementById('preview-toolbar');
+                if (toolbar) toolbar.classList.remove('is-hidden');
+                syncPreviewToolbarSpacer();
+            }
             ['home', 'form', 'manage'].forEach(nav => {
                 const btn = document.getElementById(`nav-${nav}`);
                 if (btn) {
@@ -398,8 +436,36 @@
                 }
             });
             if (viewName === 'manage') renderManageList();
-            window.scrollTo({ top: 0, behavior: 'smooth' });
+            if (typeof window !== 'undefined' && typeof window.scrollTo === 'function') {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            }
         }
+
+        function syncPreviewToolbarSpacer() {
+            const toolbar = document.getElementById('preview-toolbar');
+            const spacer = document.getElementById('preview-toolbar-spacer');
+            if (toolbar && spacer) spacer.style.height = `${toolbar.offsetHeight}px`;
+        }
+
+        let previousScrollPosition = window.scrollY;
+
+        window.addEventListener('scroll', () => {
+            const preview = document.getElementById('view-preview');
+            const toolbar = document.getElementById('preview-toolbar');
+            if (!preview || !toolbar || preview.classList.contains('hidden')) return;
+
+            const currentScrollPosition = window.scrollY;
+            if (currentScrollPosition < 100) {
+                toolbar.classList.remove('is-hidden');
+            } else if (currentScrollPosition > previousScrollPosition + 8) {
+                toolbar.classList.add('is-hidden');
+            } else if (currentScrollPosition < previousScrollPosition - 8) {
+                toolbar.classList.remove('is-hidden');
+            }
+            previousScrollPosition = currentScrollPosition;
+        }, { passive: true });
+
+        window.addEventListener('resize', syncPreviewToolbarSpacer);
 
         function addProjectRow(data = { title: '', desc: '', link: '' }) {
             const container = document.getElementById('projects-container');
@@ -458,12 +524,12 @@
             try {
                 const { id, ...sampleData } = SAMPLE_DATA;
                 currentPortfolio = await apiRequest('/api/portfolios', 'POST', sampleData);
-                portfoliosDB.unshift(currentPortfolio);
+                portfoliosDB = [currentPortfolio, ...safeArray(portfoliosDB)];
                 updateSavedBadge();
                 navigateTo('templates');
                 showToast('Demo portfolio created!');
             } catch (error) {
-                showToast(error.message);
+                showToast(getErrorMessage(error));
             }
         }
 
@@ -509,14 +575,16 @@
                 const isEditing = Boolean(currentPortfolio?.id);
                 const url = isEditing ? `/api/portfolios/${currentPortfolio.id}` : '/api/portfolios';
                 currentPortfolio = await apiRequest(url, isEditing ? 'PUT' : 'POST', formData);
-                const existingIdx = portfoliosDB.findIndex(p => p.id === currentPortfolio.id);
-                if (existingIdx >= 0) portfoliosDB[existingIdx] = currentPortfolio;
-                else portfoliosDB.unshift(currentPortfolio);
+                const list = safeArray(portfoliosDB);
+                const existingIdx = list.findIndex(p => p.id === currentPortfolio.id);
+                if (existingIdx >= 0) list[existingIdx] = currentPortfolio;
+                else list.unshift(currentPortfolio);
+                portfoliosDB = list;
                 updateSavedBadge();
                 showToast('Portfolio information saved!');
                 navigateTo('templates');
             } catch (error) {
-                showToast(error.message);
+                showToast(getErrorMessage(error));
             }
         }
 
@@ -532,9 +600,9 @@
         }
 
         function renderGeneratedPortfolio() {
-            if (!currentPortfolio) currentPortfolio = SAMPLE_DATA;
             const container = document.getElementById('portfolio-output');
-            const data = currentPortfolio;
+            if (!container) return;
+            const data = normalizePortfolioData(currentPortfolio || SAMPLE_DATA);
             ['simple', 'modern', 'creative'].forEach(t => {
                 const btn = document.getElementById(`btn-tpl-${t}`);
                 if (btn) btn.className = t === selectedTemplate ? 'px-3 py-1.5 rounded-lg bg-white shadow text-slate-900 font-extrabold' : 'px-3 py-1.5 rounded-lg text-slate-500 hover:text-slate-900';
@@ -545,56 +613,64 @@
         }
 
         function renderSimpleTemplate(d) {
+            const portfolio = normalizePortfolioData(d);
+            const experience = safeArray(portfolio.experience);
+            const projects = safeArray(portfolio.projects);
+            const skills = safeArray(portfolio.skills);
             return `
                 <div class="p-8 sm:p-12 max-w-4xl mx-auto space-y-10 text-slate-800 bg-white font-serif">
                     <div class="border-b border-slate-200 pb-8 flex flex-col sm:flex-row justify-between items-start sm:items-center gap-6">
                         <div>
-                            <h1 class="text-4xl sm:text-5xl font-bold tracking-tight text-slate-900">${escapeHTML(d.fullName)}</h1>
-                            <p class="text-lg font-sans text-sky-700 font-semibold mt-1">${escapeHTML(d.jobTitle)}</p>
+                            <h1 class="text-4xl sm:text-5xl font-bold tracking-tight text-slate-900">${escapeHTML(portfolio.fullName)}</h1>
+                            <p class="text-lg font-sans text-sky-700 font-semibold mt-1">${escapeHTML(portfolio.jobTitle)}</p>
                             <div class="flex flex-wrap gap-4 font-sans text-xs text-slate-500 mt-3">
-                                ${d.email ? `<span><i class="fa-solid fa-envelope mr-1"></i>${escapeHTML(d.email)}</span>` : ''}
-                                ${d.phone ? `<span><i class="fa-solid fa-phone mr-1"></i>${escapeHTML(d.phone)}</span>` : ''}
-                                ${d.address ? `<span><i class="fa-solid fa-location-dot mr-1"></i>${escapeHTML(d.address)}</span>` : ''}
+                                ${portfolio.email ? `<span><i class="fa-solid fa-envelope mr-1"></i>${escapeHTML(portfolio.email)}</span>` : ''}
+                                ${portfolio.phone ? `<span><i class="fa-solid fa-phone mr-1"></i>${escapeHTML(portfolio.phone)}</span>` : ''}
+                                ${portfolio.address ? `<span><i class="fa-solid fa-location-dot mr-1"></i>${escapeHTML(portfolio.address)}</span>` : ''}
                             </div>
                         </div>
-                        <img src="${escapeHTML(d.profilePic)}" onerror="this.src='https://placehold.co/120x120/e2e8f0/475569?text=Profile'" alt="Profile" class="w-24 h-24 rounded-full object-cover border-2 border-slate-200 shadow-sm shrink-0">
+                        <img src="${escapeHTML(portfolio.profilePic)}" onerror="this.src='https://placehold.co/120x120/e2e8f0/475569?text=Profile'" alt="Profile" class="w-24 h-24 rounded-full object-cover border-2 border-slate-200 shadow-sm shrink-0">
                     </div>
-                    <div class="font-sans"><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">About Me</h2><p class="text-slate-700 leading-relaxed">${escapeHTML(d.aboutMe)}</p></div>
-                    ${d.experience && d.experience.length ? `<div class="font-sans space-y-4"><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">Work Experience</h2><div class="space-y-6">${d.experience.map(exp => `<div><div class="flex justify-between items-baseline"><h3 class="font-bold text-slate-900">${escapeHTML(exp.role)} <span class="text-slate-400 font-normal">at ${escapeHTML(exp.company)}</span></h3><span class="text-xs text-slate-400">${escapeHTML(exp.duration)}</span></div><p class="text-sm text-slate-600 mt-1">${escapeHTML(exp.desc)}</p></div>`).join('')}</div></div>` : ''}
-                    ${d.projects && d.projects.length ? `<div class="font-sans space-y-4"><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">Featured Projects</h2><div class="grid sm:grid-cols-2 gap-4">${d.projects.map(p => `<div class="p-4 rounded-xl border border-slate-100 bg-slate-50"><h3 class="font-bold text-slate-900 text-sm">${escapeHTML(p.title)}</h3><p class="text-xs text-slate-600 mt-1">${escapeHTML(p.desc)}</p>${p.link ? `<a href="${escapeHTML(p.link)}" target="_blank" class="inline-block mt-2 text-xs text-sky-600 font-semibold hover:underline">View Project →</a>` : ''}</div>`).join('')}</div></div>` : ''}
+                    <div class="font-sans"><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">About Me</h2><p class="text-slate-700 leading-relaxed">${escapeHTML(portfolio.aboutMe)}</p></div>
+                    ${experience.length ? `<div class="font-sans space-y-4"><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">Work Experience</h2><div class="space-y-6">${experience.map(exp => `<div><div class="flex justify-between items-baseline"><h3 class="font-bold text-slate-900">${escapeHTML(exp.role)} <span class="text-slate-400 font-normal">at ${escapeHTML(exp.company)}</span></h3><span class="text-xs text-slate-400">${escapeHTML(exp.duration)}</span></div><p class="text-sm text-slate-600 mt-1">${escapeHTML(exp.desc)}</p></div>`).join('')}</div></div>` : ''}
+                    ${projects.length ? `<div class="font-sans space-y-4"><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-4">Featured Projects</h2><div class="grid sm:grid-cols-2 gap-4">${projects.map(p => `<div class="p-4 rounded-xl border border-slate-100 bg-slate-50"><h3 class="font-bold text-slate-900 text-sm">${escapeHTML(p.title)}</h3><p class="text-xs text-slate-600 mt-1">${escapeHTML(p.desc)}</p>${p.link ? `<a href="${escapeHTML(p.link)}" target="_blank" class="inline-block mt-2 text-xs text-sky-600 font-semibold hover:underline">View Project →</a>` : ''}</div>`).join('')}</div></div>` : ''}
                     <div class="font-sans grid sm:grid-cols-2 gap-8 border-t border-slate-200 pt-8">
-                        <div><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Education</h2><p class="font-bold text-slate-900 text-sm">${escapeHTML(d.eduDegree || 'Degree Details')}</p><p class="text-xs text-slate-600">${escapeHTML(d.eduSchool || '')} • ${escapeHTML(d.eduYear || '')}</p></div>
-                        <div><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Skills</h2><div class="flex flex-wrap gap-1.5">${d.skills.map(s => `<span class="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-md">${escapeHTML(s)}</span>`).join('')}</div></div>
+                        <div><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Education</h2><p class="font-bold text-slate-900 text-sm">${escapeHTML(portfolio.eduDegree || 'Degree Details')}</p><p class="text-xs text-slate-600">${escapeHTML(portfolio.eduSchool || '')} • ${escapeHTML(portfolio.eduYear || '')}</p></div>
+                        <div><h2 class="text-xs font-bold uppercase tracking-widest text-slate-400 mb-2">Skills</h2><div class="flex flex-wrap gap-1.5">${skills.map(s => `<span class="px-2.5 py-1 bg-slate-100 text-slate-700 text-xs font-medium rounded-md">${escapeHTML(s)}</span>`).join('')}</div></div>
                     </div>
                 </div>
             `;
         }
 
         function renderModernTemplate(d) {
+            const portfolio = normalizePortfolioData(d);
+            const experience = safeArray(portfolio.experience);
+            const projects = safeArray(portfolio.projects);
+            const skills = safeArray(portfolio.skills);
             return `
                 <div class="bg-slate-950 text-slate-100 min-h-full font-jakarta p-6 sm:p-10">
                     <div class="bg-slate-900 rounded-3xl p-6 sm:p-8 border border-slate-800 shadow-2xl flex flex-col md:flex-row items-center gap-8 mb-8">
-                        <img src="${escapeHTML(d.profilePic)}" onerror="this.src='https://placehold.co/150x150/1e293b/ffffff?text=User'" alt="Profile" class="w-32 h-32 rounded-2xl object-cover border-2 border-indigo-500 shadow-lg shadow-indigo-500/20">
+                        <img src="${escapeHTML(portfolio.profilePic)}" onerror="this.src='https://placehold.co/150x150/1e293b/ffffff?text=User'" alt="Profile" class="w-32 h-32 rounded-2xl object-cover border-2 border-indigo-500 shadow-lg shadow-indigo-500/20">
                         <div class="flex-1 text-center md:text-left space-y-2">
                             <span class="px-3 py-1 bg-indigo-500/10 border border-indigo-500/30 text-indigo-400 rounded-full text-xs font-bold uppercase tracking-wider">Available for Hire</span>
-                            <h1 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">${escapeHTML(d.fullName)}</h1>
-                            <p class="text-indigo-400 font-semibold text-lg">${escapeHTML(d.jobTitle)}</p>
-                            <p class="text-slate-400 text-sm max-w-2xl pt-1">${escapeHTML(d.aboutMe)}</p>
+                            <h1 class="text-3xl sm:text-4xl font-extrabold text-white tracking-tight">${escapeHTML(portfolio.fullName)}</h1>
+                            <p class="text-indigo-400 font-semibold text-lg">${escapeHTML(portfolio.jobTitle)}</p>
+                            <p class="text-slate-400 text-sm max-w-2xl pt-1">${escapeHTML(portfolio.aboutMe)}</p>
                             <div class="flex flex-wrap justify-center md:justify-start gap-4 text-xs text-slate-400 pt-3">
-                                ${d.email ? `<span class="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700"><i class="fa-solid fa-envelope text-indigo-400"></i> ${escapeHTML(d.email)}</span>` : ''}
-                                ${d.address ? `<span class="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700"><i class="fa-solid fa-location-dot text-indigo-400"></i> ${escapeHTML(d.address)}</span>` : ''}
+                                ${portfolio.email ? `<span class="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700"><i class="fa-solid fa-envelope text-indigo-400"></i> ${escapeHTML(portfolio.email)}</span>` : ''}
+                                ${portfolio.address ? `<span class="flex items-center gap-1.5 bg-slate-800/80 px-3 py-1.5 rounded-lg border border-slate-700"><i class="fa-solid fa-location-dot text-indigo-400"></i> ${escapeHTML(portfolio.address)}</span>` : ''}
                             </div>
                         </div>
                     </div>
                     <div class="grid md:grid-cols-3 gap-8">
                         <div class="space-y-6">
-                            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800"><h3 class="text-sm font-extrabold uppercase tracking-wider text-indigo-400 mb-4 flex items-center gap-2"><i class="fa-solid fa-code"></i> Tech Stack</h3><div class="flex flex-wrap gap-2">${d.skills.map(s => `<span class="px-3 py-1.5 bg-slate-800 border border-slate-700 text-indigo-200 text-xs font-semibold rounded-lg shadow-sm">${escapeHTML(s)}</span>`).join('')}</div></div>
-                            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800"><h3 class="text-sm font-extrabold uppercase tracking-wider text-indigo-400 mb-4 flex items-center gap-2"><i class="fa-solid fa-graduation-cap"></i> Education</h3><div class="space-y-1"><p class="font-bold text-white text-sm">${escapeHTML(d.eduDegree || '')}</p><p class="text-xs text-slate-400">${escapeHTML(d.eduSchool || '')}</p><p class="text-xs text-indigo-400 font-mono mt-1">${escapeHTML(d.eduYear || '')}</p></div></div>
-                            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800"><h3 class="text-sm font-extrabold uppercase tracking-wider text-indigo-400 mb-4 flex items-center gap-2"><i class="fa-solid fa-link"></i> Social Links</h3><div class="space-y-2 text-xs">${d.socialGithub ? `<a href="${escapeHTML(d.socialGithub)}" target="_blank" class="flex items-center gap-2 text-slate-300 hover:text-indigo-400"><i class="fa-brands fa-github text-base"></i> GitHub Profile</a>` : ''}${d.socialLinkedin ? `<a href="${escapeHTML(d.socialLinkedin)}" target="_blank" class="flex items-center gap-2 text-slate-300 hover:text-indigo-400"><i class="fa-brands fa-linkedin text-base"></i> LinkedIn Profile</a>` : ''}${d.socialWebsite ? `<a href="${escapeHTML(d.socialWebsite)}" target="_blank" class="flex items-center gap-2 text-slate-300 hover:text-indigo-400"><i class="fa-solid fa-globe text-base"></i> Personal Website</a>` : ''}</div></div>
+                            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800"><h3 class="text-sm font-extrabold uppercase tracking-wider text-indigo-400 mb-4 flex items-center gap-2"><i class="fa-solid fa-code"></i> Tech Stack</h3><div class="flex flex-wrap gap-2">${skills.map(s => `<span class="px-3 py-1.5 bg-slate-800 border border-slate-700 text-indigo-200 text-xs font-semibold rounded-lg shadow-sm">${escapeHTML(s)}</span>`).join('')}</div></div>
+                            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800"><h3 class="text-sm font-extrabold uppercase tracking-wider text-indigo-400 mb-4 flex items-center gap-2"><i class="fa-solid fa-graduation-cap"></i> Education</h3><div class="space-y-1"><p class="font-bold text-white text-sm">${escapeHTML(portfolio.eduDegree || '')}</p><p class="text-xs text-slate-400">${escapeHTML(portfolio.eduSchool || '')}</p><p class="text-xs text-indigo-400 font-mono mt-1">${escapeHTML(portfolio.eduYear || '')}</p></div></div>
+                            <div class="bg-slate-900 p-6 rounded-2xl border border-slate-800"><h3 class="text-sm font-extrabold uppercase tracking-wider text-indigo-400 mb-4 flex items-center gap-2"><i class="fa-solid fa-link"></i> Social Links</h3><div class="space-y-2 text-xs">${portfolio.socialGithub ? `<a href="${escapeHTML(portfolio.socialGithub)}" target="_blank" class="flex items-center gap-2 text-slate-300 hover:text-indigo-400"><i class="fa-brands fa-github text-base"></i> GitHub Profile</a>` : ''}${portfolio.socialLinkedin ? `<a href="${escapeHTML(portfolio.socialLinkedin)}" target="_blank" class="flex items-center gap-2 text-slate-300 hover:text-indigo-400"><i class="fa-brands fa-linkedin text-base"></i> LinkedIn Profile</a>` : ''}${portfolio.socialWebsite ? `<a href="${escapeHTML(portfolio.socialWebsite)}" target="_blank" class="flex items-center gap-2 text-slate-300 hover:text-indigo-400"><i class="fa-solid fa-globe text-base"></i> Personal Website</a>` : ''}</div></div>
                         </div>
                         <div class="md:col-span-2 space-y-6">
-                            ${d.experience && d.experience.length ? `<div class="bg-slate-900 p-6 rounded-2xl border border-slate-800"><h3 class="text-sm font-extrabold uppercase tracking-wider text-indigo-400 mb-6 flex items-center gap-2"><i class="fa-solid fa-briefcase"></i> Work Experience</h3><div class="space-y-6">${d.experience.map(exp => `<div class="border-l-2 border-indigo-500/50 pl-4 space-y-1 relative"><div class="flex justify-between items-start"><h4 class="font-bold text-white text-base">${escapeHTML(exp.role)}</h4><span class="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">${escapeHTML(exp.duration)}</span></div><p class="text-xs text-indigo-400 font-semibold">${escapeHTML(exp.company)}</p><p class="text-xs text-slate-400 leading-relaxed pt-1">${escapeHTML(exp.desc)}</p></div>`).join('')}</div></div>` : ''}
-                            ${d.projects && d.projects.length ? `<div class="bg-slate-900 p-6 rounded-2xl border border-slate-800"><h3 class="text-sm font-extrabold uppercase tracking-wider text-indigo-400 mb-6 flex items-center gap-2"><i class="fa-solid fa-rocket"></i> Featured Projects</h3><div class="grid sm:grid-cols-2 gap-4">${d.projects.map(p => `<div class="p-4 rounded-xl bg-slate-800/60 border border-slate-700/60 flex flex-col justify-between"><div><h4 class="font-bold text-white text-sm">${escapeHTML(p.title)}</h4><p class="text-xs text-slate-400 mt-1">${escapeHTML(p.desc)}</p></div>${p.link ? `<a href="${escapeHTML(p.link)}" target="_blank" class="mt-3 text-xs text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1">Link <i class="fa-solid fa-external-link text-[10px]"></i></a>` : ''}</div>`).join('')}</div></div>` : ''}
+                            ${experience.length ? `<div class="bg-slate-900 p-6 rounded-2xl border border-slate-800"><h3 class="text-sm font-extrabold uppercase tracking-wider text-indigo-400 mb-6 flex items-center gap-2"><i class="fa-solid fa-briefcase"></i> Work Experience</h3><div class="space-y-6">${experience.map(exp => `<div class="border-l-2 border-indigo-500/50 pl-4 space-y-1 relative"><div class="flex justify-between items-start"><h4 class="font-bold text-white text-base">${escapeHTML(exp.role)}</h4><span class="text-xs px-2.5 py-0.5 rounded-full bg-slate-800 text-slate-400 border border-slate-700">${escapeHTML(exp.duration)}</span></div><p class="text-xs text-indigo-400 font-semibold">${escapeHTML(exp.company)}</p><p class="text-xs text-slate-400 leading-relaxed pt-1">${escapeHTML(exp.desc)}</p></div>`).join('')}</div></div>` : ''}
+                            ${projects.length ? `<div class="bg-slate-900 p-6 rounded-2xl border border-slate-800"><h3 class="text-sm font-extrabold uppercase tracking-wider text-indigo-400 mb-6 flex items-center gap-2"><i class="fa-solid fa-rocket"></i> Featured Projects</h3><div class="grid sm:grid-cols-2 gap-4">${projects.map(p => `<div class="p-4 rounded-xl bg-slate-800/60 border border-slate-700/60 flex flex-col justify-between"><div><h4 class="font-bold text-white text-sm">${escapeHTML(p.title)}</h4><p class="text-xs text-slate-400 mt-1">${escapeHTML(p.desc)}</p></div>${p.link ? `<a href="${escapeHTML(p.link)}" target="_blank" class="mt-3 text-xs text-indigo-400 hover:text-indigo-300 font-bold flex items-center gap-1">Link <i class="fa-solid fa-external-link text-[10px]"></i></a>` : ''}</div>`).join('')}</div></div>` : ''}
                         </div>
                     </div>
                 </div>
@@ -602,37 +678,41 @@
         }
 
         function renderCreativeTemplate(d) {
+            const portfolio = normalizePortfolioData(d);
+            const experience = safeArray(portfolio.experience);
+            const projects = safeArray(portfolio.projects);
+            const skills = safeArray(portfolio.skills);
             return `
                 <div class="bg-gradient-to-br from-indigo-900 via-purple-900 to-pink-800 text-white p-6 sm:p-12 font-sans">
                     <div class="creative-card text-slate-900 rounded-3xl p-8 sm:p-10 shadow-2xl mb-10 relative overflow-hidden">
                         <div class="flex flex-col md:flex-row items-center gap-8 relative z-10">
-                            <img src="${escapeHTML(d.profilePic)}" onerror="this.src='https://placehold.co/160x160/ec4899/ffffff?text=Artist'" alt="Creative Profile" class="w-36 h-36 rounded-3xl object-cover shadow-2xl border-4 border-white transform -rotate-3 hover:rotate-0 transition">
+                            <img src="${escapeHTML(portfolio.profilePic)}" onerror="this.src='https://placehold.co/160x160/ec4899/ffffff?text=Artist'" alt="Creative Profile" class="w-36 h-36 rounded-3xl object-cover shadow-2xl border-4 border-white transform -rotate-3 hover:rotate-0 transition">
                             <div class="text-center md:text-left">
                                 <span class="bg-pink-100 text-pink-700 text-xs font-black uppercase px-3 py-1 rounded-full tracking-wider">Creative Mind</span>
-                                <h1 class="text-4xl sm:text-5xl font-black text-slate-900 mt-2 tracking-tight">${escapeHTML(d.fullName)}</h1>
-                                <p class="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">${escapeHTML(d.jobTitle)}</p>
-                                <p class="text-slate-600 text-sm mt-3 max-w-xl leading-relaxed">${escapeHTML(d.aboutMe)}</p>
+                                <h1 class="text-4xl sm:text-5xl font-black text-slate-900 mt-2 tracking-tight">${escapeHTML(portfolio.fullName)}</h1>
+                                <p class="text-xl font-bold text-transparent bg-clip-text bg-gradient-to-r from-purple-600 to-pink-600">${escapeHTML(portfolio.jobTitle)}</p>
+                                <p class="text-slate-600 text-sm mt-3 max-w-xl leading-relaxed">${escapeHTML(portfolio.aboutMe)}</p>
                             </div>
                         </div>
                     </div>
                     <div class="grid md:grid-cols-3 gap-8">
                         <div class="space-y-8">
-                            <div class="creative-card text-slate-900 rounded-3xl p-6 shadow-xl space-y-4"><h3 class="text-lg font-black text-slate-900 flex items-center gap-2"><i class="fa-solid fa-wand-magic-sparkles text-pink-500"></i> Superpowers</h3><div class="flex flex-wrap gap-2">${d.skills.map(s => `<span class="px-3 py-1.5 bg-gradient-to-r from-pink-500 to-purple-500 text-white text-xs font-bold rounded-xl shadow-sm">${escapeHTML(s)}</span>`).join('')}</div></div>
-                            <div class="creative-card text-slate-900 rounded-3xl p-6 shadow-xl space-y-4"><h3 class="text-lg font-black text-slate-900 flex items-center gap-2"><i class="fa-solid fa-compass text-indigo-500"></i> Info & Location</h3><div class="text-xs space-y-2 text-slate-600"><p><strong>Education:</strong> ${escapeHTML(d.eduDegree || '')} (${escapeHTML(d.eduSchool || '')})</p><p><strong>Location:</strong> ${escapeHTML(d.address || 'Global')}</p><p><strong>Email:</strong> ${escapeHTML(d.email || '')}</p></div></div>
+                            <div class="creative-card text-slate-900 rounded-3xl p-6 shadow-xl space-y-4"><h3 class="text-lg font-black text-slate-900 flex items-center gap-2"><i class="fa-solid fa-wand-magic-sparkles text-pink-500"></i> Superpowers</h3><div class="flex flex-wrap gap-2">${skills.map(s => `<span class="px-3 py-1.5 bg-gradient-to-r from-pink-500 to-purple-500 text-white text-xs font-bold rounded-xl shadow-sm">${escapeHTML(s)}</span>`).join('')}</div></div>
+                            <div class="creative-card text-slate-900 rounded-3xl p-6 shadow-xl space-y-4"><h3 class="text-lg font-black text-slate-900 flex items-center gap-2"><i class="fa-solid fa-compass text-indigo-500"></i> Info & Location</h3><div class="text-xs space-y-2 text-slate-600"><p><strong>Education:</strong> ${escapeHTML(portfolio.eduDegree || '')} (${escapeHTML(portfolio.eduSchool || '')})</p><p><strong>Location:</strong> ${escapeHTML(portfolio.address || 'Global')}</p><p><strong>Email:</strong> ${escapeHTML(portfolio.email || '')}</p></div></div>
                         </div>
                         <div class="md:col-span-2 space-y-8">
-                            ${d.projects && d.projects.length ? `<div class="creative-card text-slate-900 rounded-3xl p-6 sm:p-8 shadow-xl"><h3 class="text-xl font-black text-slate-900 mb-6 flex items-center gap-2"><i class="fa-solid fa-palette text-purple-600"></i> Featured Work</h3><div class="grid sm:grid-cols-2 gap-4">${d.projects.map(p => `<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-md hover:shadow-xl transition"><h4 class="font-black text-slate-900 text-base">${escapeHTML(p.title)}</h4><p class="text-xs text-slate-600 mt-2">${escapeHTML(p.desc)}</p>${p.link ? `<a href="${escapeHTML(p.link)}" target="_blank" class="inline-block mt-3 text-xs bg-pink-500 hover:bg-pink-600 text-white px-3 py-1.5 rounded-lg font-bold transition">Explore Project</a>` : ''}</div>`).join('')}</div></div>` : ''}
-                            ${d.experience && d.experience.length ? `<div class="creative-card text-slate-900 rounded-3xl p-6 sm:p-8 shadow-xl"><h3 class="text-xl font-black text-slate-900 mb-6 flex items-center gap-2"><i class="fa-solid fa-fire text-amber-500"></i> Experience Journey</h3><div class="space-y-6">${d.experience.map(exp => `<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2"><div class="flex justify-between items-center"><h4 class="font-bold text-slate-900 text-base">${escapeHTML(exp.role)}</h4><span class="text-xs font-black bg-purple-100 text-purple-700 px-2.5 py-1 rounded-full">${escapeHTML(exp.duration)}</span></div><p class="text-xs text-pink-600 font-bold">${escapeHTML(exp.company)}</p><p class="text-xs text-slate-600 leading-relaxed">${escapeHTML(exp.desc)}</p></div>`).join('')}</div></div>` : ''}
+                            ${projects.length ? `<div class="creative-card text-slate-900 rounded-3xl p-6 sm:p-8 shadow-xl"><h3 class="text-xl font-black text-slate-900 mb-6 flex items-center gap-2"><i class="fa-solid fa-palette text-purple-600"></i> Featured Work</h3><div class="grid sm:grid-cols-2 gap-4">${projects.map(p => `<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-md hover:shadow-xl transition"><h4 class="font-black text-slate-900 text-base">${escapeHTML(p.title)}</h4><p class="text-xs text-slate-600 mt-2">${escapeHTML(p.desc)}</p>${p.link ? `<a href="${escapeHTML(p.link)}" target="_blank" class="inline-block mt-3 text-xs bg-pink-500 hover:bg-pink-600 text-white px-3 py-1.5 rounded-lg font-bold transition">Explore Project</a>` : ''}</div>`).join('')}</div></div>` : ''}
+                            ${experience.length ? `<div class="creative-card text-slate-900 rounded-3xl p-6 sm:p-8 shadow-xl"><h3 class="text-xl font-black text-slate-900 mb-6 flex items-center gap-2"><i class="fa-solid fa-fire text-amber-500"></i> Experience Journey</h3><div class="space-y-6">${experience.map(exp => `<div class="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-2"><div class="flex justify-between items-center"><h4 class="font-bold text-slate-900 text-base">${escapeHTML(exp.role)}</h4><span class="text-xs font-black bg-purple-100 text-purple-700 px-2.5 py-1 rounded-full">${escapeHTML(exp.duration)}</span></div><p class="text-xs text-pink-600 font-bold">${escapeHTML(exp.company)}</p><p class="text-xs text-slate-600 leading-relaxed">${escapeHTML(exp.desc)}</p></div>`).join('')}</div></div>` : ''}
                         </div>
                     </div>
                 </div>
             `;
         }
-
         function renderManageList() {
             const container = document.getElementById('manage-list-container');
             if (!container) return;
-            if (portfoliosDB.length === 0) {
+            const list = safeArray(portfoliosDB);
+            if (list.length === 0) {
                 container.innerHTML = `
                     <div class="bg-white p-12 text-center rounded-2xl border border-slate-200 shadow-sm space-y-4">
                         <div class="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center text-slate-400 text-2xl mx-auto"><i class="fa-solid fa-folder-open"></i></div>
@@ -643,14 +723,14 @@
                 `;
                 return;
             }
-            container.innerHTML = portfoliosDB.map(p => `
+            container.innerHTML = list.map(p => `
                 <div class="bg-white p-6 rounded-2xl border border-slate-200 shadow-sm hover:shadow-md transition flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                     <div class="flex items-center space-x-4">
                         <img src="${escapeHTML(p.profilePic)}" onerror="this.src='https://placehold.co/100x100/e2e8f0/475569?text=User'" class="w-14 h-14 rounded-full object-cover border border-slate-200">
                         <div>
                             <h3 class="text-lg font-bold text-slate-900">${escapeHTML(p.fullName)}</h3>
                             <p class="text-sm text-sky-600 font-semibold">${escapeHTML(p.jobTitle)}</p>
-                            <p class="text-xs text-slate-400 mt-1">${escapeHTML(p.email)} • ${(p.skills || []).slice(0, 3).join(', ')}</p>
+                            <p class="text-xs text-slate-400 mt-1">${escapeHTML(p.email)} • ${safeArray(p.skills).slice(0, 3).join(', ')}</p>
                         </div>
                     </div>
                     <div class="flex items-center space-x-2 w-full sm:w-auto justify-end border-t sm:border-0 pt-3 sm:pt-0">
@@ -691,12 +771,12 @@
             if (confirm('Are you sure you want to delete this portfolio from the database?')) {
                 try {
                     await apiRequest(`/api/portfolios/${id}`, 'DELETE');
-                    portfoliosDB = portfoliosDB.filter(p => p.id !== id);
+                    portfoliosDB = safeArray(portfoliosDB).filter(p => p.id !== id);
                     updateSavedBadge();
                     renderManageList();
                     showToast('Portfolio deleted successfully');
                 } catch (error) {
-                    showToast(error.message);
+                    showToast(getErrorMessage(error));
                 }
             }
         }
@@ -735,9 +815,27 @@
         }
 
         function generatePortfolioPicture() {
-            const d = currentPortfolio || SAMPLE_DATA;
+            const d = normalizePortfolioData(currentPortfolio || SAMPLE_DATA);
             const canvas = document.getElementById('exportCanvas');
+            if (!canvas) return;
             const ctx = canvas.getContext('2d');
+            if (!ctx) return;
+            const roundRect = typeof ctx.roundRect === 'function'
+                ? (x, y, width, height, radius) => ctx.roundRect(x, y, width, height, radius)
+                : (x, y, width, height, radius) => {
+                    const r = Math.min(radius, width / 2, height / 2);
+                    ctx.beginPath();
+                    ctx.moveTo(x + r, y);
+                    ctx.lineTo(x + width - r, y);
+                    ctx.quadraticCurveTo(x + width, y, x + width, y + r);
+                    ctx.lineTo(x + width, y + height - r);
+                    ctx.quadraticCurveTo(x + width, y + height, x + width - r, y + height);
+                    ctx.lineTo(x + r, y + height);
+                    ctx.quadraticCurveTo(x, y + height, x, y + height - r);
+                    ctx.lineTo(x, y + r);
+                    ctx.quadraticCurveTo(x, y, x + r, y);
+                    ctx.closePath();
+                };
             canvas.width = 800;
             canvas.height = 500;
             const grad = ctx.createLinearGradient(0, 0, 800, 500);
@@ -758,7 +856,7 @@
             ctx.shadowColor = 'rgba(0, 0, 0, 0.25)';
             ctx.shadowBlur = 20;
             ctx.beginPath();
-            ctx.roundRect(40, 40, 720, 420, 24);
+            roundRect(40, 40, 720, 420, 24);
             ctx.fill();
             ctx.shadowBlur = 0;
             const textColor = selectedTemplate === 'modern' ? '#ffffff' : '#0f172a';
@@ -771,7 +869,7 @@
             ctx.fillText(d.jobTitle || 'Professional Role', 80, 145);
             ctx.fillStyle = selectedTemplate === 'modern' ? '#94a3b8' : '#475569';
             ctx.font = '14px "Inter", sans-serif';
-            const shortBio = (d.aboutMe || '').substring(0, 90) + '...';
+            const shortBio = String(d.aboutMe || '').substring(0, 90) + '...';
             ctx.fillText(shortBio, 80, 185);
             ctx.strokeStyle = selectedTemplate === 'modern' ? '#334155' : '#e2e8f0';
             ctx.lineWidth = 1;
@@ -784,9 +882,9 @@
             ctx.fillText('CORE SKILLS', 80, 250);
             let skillX = 80;
             let skillY = 270;
-            (d.skills || []).slice(0, 6).forEach(skill => {
+            safeArray(d.skills).slice(0, 6).forEach(skill => {
                 ctx.font = 'bold 12px "Inter", sans-serif';
-                const metrics = ctx.measureText(skill);
+                const metrics = ctx.measureText(String(skill));
                 const badgeWidth = metrics.width + 24;
                 if (skillX + badgeWidth > 720) {
                     skillX = 80;
@@ -794,10 +892,10 @@
                 }
                 ctx.fillStyle = selectedTemplate === 'modern' ? '#312e81' : '#e0f2fe';
                 ctx.beginPath();
-                ctx.roundRect(skillX, skillY, badgeWidth, 26, 8);
+                roundRect(skillX, skillY, badgeWidth, 26, 8);
                 ctx.fill();
                 ctx.fillStyle = selectedTemplate === 'modern' ? '#c7d2fe' : '#0369a1';
-                ctx.fillText(skill, skillX + 12, skillY + 17);
+                ctx.fillText(String(skill), skillX + 12, skillY + 17);
                 skillX += badgeWidth + 10;
             });
             ctx.fillStyle = selectedTemplate === 'modern' ? '#64748b' : '#94a3b8';
@@ -808,8 +906,8 @@
             ctx.fillText('Generated by PortfolioCraft', 560, 420);
             const modal = document.getElementById('pictureModal');
             const downloadBtn = document.getElementById('downloadCanvasBtn');
-            downloadBtn.href = canvas.toDataURL('image/png');
-            modal.classList.remove('hidden');
+            if (downloadBtn) downloadBtn.href = canvas.toDataURL('image/png');
+            if (modal) modal.classList.remove('hidden');
         }
 
         function closePictureModal() {
@@ -817,15 +915,15 @@
         }
 
         function escapeHTML(str) {
-            if (!str) return '';
-            return str.replace(/[&<>"']/g, tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[tag] || tag));
+            if (str === null || str === undefined) return '';
+            return String(str).replace(/[&<>"']/g, tag => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[tag] || tag));
         }
 
         function showToast(message) {
             const toast = document.getElementById('toast');
             const msgSpan = document.getElementById('toast-message');
             if (toast && msgSpan) {
-                msgSpan.innerText = message;
+                msgSpan.innerText = getErrorMessage(message);
                 toast.classList.remove('translate-y-20', 'opacity-0');
                 setTimeout(() => toast.classList.add('translate-y-20', 'opacity-0'), 3000);
             }
