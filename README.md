@@ -1,8 +1,11 @@
-# WSTCOLLABFINALS
+# PortfolioCraft
+
+A portfolio builder with account-based sign-in, social login providers and three
+crafted portfolio templates.
 
 ## Run locally
 
-Requirements: PHP 8.3 or later, Composer, and Node.js/npm.
+Requirements: PHP 8.3 or later, Composer, and Node.js/npm (Node 20.19+ or 22+ for the Vite 8 build).
 
 ```bash
 composer run setup
@@ -12,6 +15,38 @@ php artisan serve
 Open <http://127.0.0.1:8000>. The setup command installs PHP and frontend
 dependencies, creates the local environment and SQLite database if they do not
 exist, generates the application key, and runs the database migrations.
+
+## Social sign-in
+
+Social login is powered by [Laravel Socialite](https://laravel.com/docs/socialite).
+A provider only appears on the sign-in and registration screens once its client
+id and client secret are present in `.env`; the rest are shown as "not
+configured" so the interface never breaks.
+
+| Provider  | Environment variables                     | Callback URL                            |
+|-----------|-------------------------------------------|-----------------------------------------|
+| Google    | `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET` | `{APP_URL}/auth/google/callback`        |
+| GitHub    | `GITHUB_CLIENT_ID`, `GITHUB_CLIENT_SECRET` | `{APP_URL}/auth/github/callback`        |
+| Facebook  | `FACEBOOK_CLIENT_ID`, `FACEBOOK_CLIENT_SECRET` | `{APP_URL}/auth/facebook/callback` |
+| X         | `X_CLIENT_ID`, `X_CLIENT_SECRET`           | `{APP_URL}/auth/x/callback`             |
+| LinkedIn  | `LINKEDIN_CLIENT_ID`, `LINKEDIN_CLIENT_SECRET` | `{APP_URL}/auth/linkedin/callback`  |
+| GitLab    | `GITLAB_CLIENT_ID`, `GITLAB_CLIENT_SECRET` | `{APP_URL}/auth/gitlab/callback`        |
+| Bitbucket | `BITBUCKET_CLIENT_ID`, `BITBUCKET_CLIENT_SECRET` | `{APP_URL}/auth/bitbucket/callback` |
+| Twitch    | `TWITCH_CLIENT_ID`, `TWITCH_CLIENT_SECRET` | `{APP_URL}/auth/twitch/callback`        |
+
+1. Create an OAuth app with the provider and copy the client id and secret into `.env`.
+2. Register the callback URL above with the provider.
+3. Clear the config cache: `php artisan config:clear`.
+
+Signing in with a provider creates the account on first use, links to an
+existing account when the e-mail address matches, and lets signed-in users
+connect additional providers from **Account settings**.
+
+## Tests
+
+```bash
+php artisan test
+```
 
 <p align="center"><a href="https://laravel.com" target="_blank"><img src="https://raw.githubusercontent.com/laravel/art/master/logo-lockup/5%20SVG/2%20CMYK/1%20Full%20Color/laravel-logolockup-cmyk-red.svg" width="400" alt="Laravel Logo"></a></p>
 

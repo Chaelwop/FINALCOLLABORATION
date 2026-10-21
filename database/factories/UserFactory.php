@@ -34,12 +34,24 @@ class UserFactory extends Factory
     }
 
     /**
-     * Indicate that the model's email address should be unverified.
+     * Indicate that the user is unverified.
      */
     public function unverified(): static
     {
         return $this->state(fn (array $attributes) => [
             'email_verified_at' => null,
+        ]);
+    }
+
+    /**
+     * Indicate that the user has two factor authentication turned on.
+     */
+    public function withTwoFactor(string $phone = '+15550109999'): static
+    {
+        return $this->state(fn (array $attributes) => [
+            'phone' => $phone,
+            'two_factor_enabled' => true,
+            'two_factor_confirmed_at' => now(),
         ]);
     }
 }
